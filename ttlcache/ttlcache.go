@@ -47,10 +47,9 @@ func (c *TtlCache) clean(key, value any, now int64) bool {
 		c.logger.Debugf("deleting key: %d, value: %s", key, value)
 		c.eolMap.Delete(key)
 		c.cacheMap.Delete(value)
-		return true
 	}
 
-	return false
+	return true
 }
 
 func (c *TtlCache) cleaning() {
