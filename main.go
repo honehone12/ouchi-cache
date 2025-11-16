@@ -53,6 +53,7 @@ func main() {
 	originGroup := e.Group("/*")
 	originGroup.Use(cache.Middleware())
 	originGroup.Use(middleware.Proxy(originBalancer))
+	originGroup.Use(middleware.BodyDump(cache.BodyDump()))
 
 	if err := e.Start(fmt.Sprintf("0.0.0.0:%d", config.ListenPort)); err != nil {
 		e.Logger.Error(err)

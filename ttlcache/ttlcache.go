@@ -2,10 +2,12 @@ package ttlcache
 
 import (
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"lukechampine.com/blake3"
 )
 
@@ -17,8 +19,9 @@ type TtlCacheConfig struct {
 }
 
 type ChacheData struct {
-	eol  int64
-	data []byte
+	eol         int64
+	contentType string
+	data        []byte
 }
 
 type TtlCache struct {
@@ -46,14 +49,53 @@ func NewTtlCache(config TtlCacheConfig) *TtlCache {
 	return c
 }
 
-func (c *TtlCache) handler(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(ctx echo.Context) error {
+func (c *TtlCache) setHeaders(ctx echo.Context) {
+	headers := ctx.Response().Header()
+	for k, v := range c.headers {
+		headers.Set(k, v)
+	}
+}
 
+func (c *TtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(ctx echo.Context) error {
+		url := ctx.Request().URL.String()
+
+		cache, err := c.get(url)
+		if errors.Is(err, ErrNoSuchKey) || errors.Is(err, ErrExpired) {
+			c.setHeaders(ctx)
+			ctx.Response().Header().Set("XOuchCdn", "miss")
+			return next(ctx)
+		} else if err != nil {
+			return err
+		}
+
+		c.setHeaders(ctx)
+		ctx.Response().Header().Set("XOuchCdn", "cached")
+		if err := ctx.Blob(
+			http.StatusOK,
+			cache.contentType,
+			cache.data,
+		); err != nil {
+			return err
+		}
+
+		return nil
 	}
 }
 
 func (c *TtlCache) Middleware() echo.MiddlewareFunc {
-	return c.handler
+	return c.middlewareHandler
+}
+
+func (c *TtlCache) bodyDumpHandler(ctx echo.Context, req, res []byte) {
+	url := ctx.Request().URL.String()
+	contentType := ctx.Response().Header().Get("Content-Type")
+
+	c.set(url, contentType, res)
+}
+
+func (c *TtlCache) BodyDump() middleware.BodyDumpHandler {
+	return c.bodyDumpHandler
 }
 
 func (c *TtlCache) startCleaning() {
@@ -102,12 +144,13 @@ func (c *TtlCache) get(url string) (*ChacheData, error) {
 	return d, nil
 }
 
-func (c *TtlCache) set(url string, content []byte) {
+func (c *TtlCache) set(url string, contentType string, content []byte) {
 	k := blake3.Sum256([]byte(url))
 	eol := time.Now().Add(c.ttl).Unix()
 	d := &ChacheData{
-		eol:  eol,
-		data: content,
+		eol:         eol,
+		contentType: contentType,
+		data:        content,
 	}
 
 	c.cacheMap.Store(k, d)
