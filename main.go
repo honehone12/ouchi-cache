@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"ouchi/memory"
 	"ouchi/ttlcache"
 	"path"
 	"time"
@@ -27,15 +28,13 @@ func main() {
 		e.Logger.Fatal(err)
 	}
 
-	cache := ttlcache.NewTtlCache(ttlcache.TtlCacheConfig{
+	var cache ttlcache.TtlCache
+	cache = memory.NewMemoryTtlCache(ttlcache.TtlCacheConfig{
 		Ttl:     time.Second * config.TtlSec,
 		Tick:    time.Second * config.TickSec,
 		Headers: config.Headers,
 		Logger:  e.Logger,
 	})
-	if err != nil {
-		e.Logger.Fatal(err)
-	}
 
 	origin, err := url.Parse(fmt.Sprintf("http://localhost:%d", config.OriginPort))
 	if err != nil {
