@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/url"
 	"ouchi/memory"
 	"ouchi/ttlcache"
 	"path"
@@ -30,29 +29,15 @@ func main() {
 
 	var cache ttlcache.TtlCache
 	cache = memory.NewMemoryTtlCache(ttlcache.TtlCacheConfig{
+		Origin:  fmt.Sprintf("localhost:%d", config.OriginPort),
 		Ttl:     time.Second * config.TtlSec,
 		Tick:    time.Second * config.TickSec,
 		Headers: config.Headers,
 		Logger:  e.Logger,
 	})
 
-	origin, err := url.Parse(fmt.Sprintf("http://localhost:%d", config.OriginPort))
-	if err != nil {
-		e.Logger.Fatal(err)
-	}
-	originBalancer := middleware.NewRoundRobinBalancer(
-		[]*middleware.ProxyTarget{
-			{
-				Name: "origin",
-				URL:  origin,
-			},
-		},
-	)
-
 	originGroup := e.Group("/*")
 	originGroup.Use(cache.Middleware())
-	originGroup.Use(middleware.Proxy(originBalancer))
-	originGroup.Use(middleware.BodyDump(cache.BodyDump()))
 
 	if err := e.Start(fmt.Sprintf("0.0.0.0:%d", config.ListenPort)); err != nil {
 		e.Logger.Error(err)

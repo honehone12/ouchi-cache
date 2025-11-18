@@ -5,15 +5,14 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 )
 
 type TtlCache interface {
 	Middleware() echo.MiddlewareFunc
-	BodyDump() middleware.BodyDumpHandler
 }
 
 type TtlCacheConfig struct {
+	Origin  string
 	Ttl     time.Duration
 	Tick    time.Duration
 	Headers map[string]string
