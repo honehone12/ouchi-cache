@@ -64,7 +64,10 @@ func (c *MemoryTtlCache) proxyRequest(ctx echo.Context) error {
 		return err
 	}
 
-	c.set(k, pro.Header.Get("Content-Type"), b)
+	cacheControl := pro.Header.Get("Cache-Control")
+	if cacheControl != "no-cache" && cacheControl != "no-store" {
+		c.set(k, pro.Header.Get("Content-Type"), b)
+	}
 
 	res := ctx.Response()
 	res.Status = pro.StatusCode
