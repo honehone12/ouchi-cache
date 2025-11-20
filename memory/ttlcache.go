@@ -94,7 +94,7 @@ func (c *MemoryTtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFu
 
 		// WebSocket requests bypass cache and go directly to proxy
 		if isWebSocketRequest(req) {
-			c.logger.Debugf("WebSocket request: %s", req.URL.String())
+			c.logger.Infof("proxy websocket: %s", req.URL.String())
 			req.Host = c.proxyUrl.Hostname()
 			c.proxy.ServeHTTP(ctx.Response(), req)
 			c.setHeaders(ctx)
