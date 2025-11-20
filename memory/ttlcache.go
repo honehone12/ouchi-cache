@@ -1,12 +1,16 @@
 package memory
 
 import (
+	"bytes"
 	"errors"
 	"hash"
 	"hash/fnv"
 	"io"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"ouchi/ttlcache"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,9 +25,9 @@ type MemoryTtlCache struct {
 	cacheMap sync.Map
 	eolMap   sync.Map
 
-	hasher    hash.Hash
-	logger    ttlcache.Logger
-	transport http.RoundTripper
+	hasher hash.Hash
+	logger ttlcache.Logger
+	proxy  *httputil.ReverseProxy
 }
 
 func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) *MemoryTtlCache {
@@ -35,10 +39,20 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) *MemoryTtlCache {
 		cacheMap: sync.Map{},
 		eolMap:   sync.Map{},
 
-		hasher:    fnv.New128a(),
-		logger:    config.Logger,
-		transport: http.DefaultTransport,
+		hasher: fnv.New128a(),
+		logger: config.Logger,
 	}
+
+	// Create reverse proxy
+	target := &url.URL{
+		Scheme: "http",
+		Host:   config.Origin,
+	}
+	c.proxy = httputil.NewSingleHostReverseProxy(target)
+
+	// Customize the proxy to handle caching
+	c.proxy.ModifyResponse = c.modifyResponse
+
 	c.startCleaning()
 	return c
 }
@@ -50,69 +64,70 @@ func (c *MemoryTtlCache) setHeaders(ctx echo.Context) {
 	}
 }
 
-func (c *MemoryTtlCache) proxyRequest(ctx echo.Context) error {
-	req := ctx.Request()
-	k := req.URL.String()
-	req.URL.Scheme = "http"
-	req.URL.Host = c.origin
-
-	pro, err := c.transport.RoundTrip(req)
-	if err != nil {
-		return err
-	}
-	defer pro.Body.Close()
-
-	b, err := io.ReadAll(pro.Body)
-	if err != nil {
-		return err
-	}
-
-	if pro.StatusCode == http.StatusOK {
-		cacheControl := pro.Header.Get("Cache-Control")
+// modifyResponse intercepts the response to cache it if appropriate
+func (c *MemoryTtlCache) modifyResponse(resp *http.Response) error {
+	// Only cache successful responses
+	if resp.StatusCode == http.StatusOK {
+		cacheControl := resp.Header.Get("Cache-Control")
 		if cacheControl != "no-cache" && cacheControl != "no-store" {
-			c.set(k, pro.Header.Get("Content-Type"), b)
-		}
-	}
+			// Read the body
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			resp.Body.Close()
 
-	res := ctx.Response()
-	res.Status = pro.StatusCode
-	h := res.Header()
-	for k, vs := range pro.Header {
-		for _, v := range vs {
-			h.Set(k, v)
-		}
-	}
+			// Cache the response
+			c.set(resp.Request.URL.String(), resp.Header.Get("Content-Type"), body)
 
-	if _, err := res.Write(b); err != nil {
-		return err
+			// Replace the body so it can be read again
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+
+			// Mark as cache miss
+			resp.Header.Set("XOuchCdn", "miss")
+		}
 	}
 
 	return nil
 }
 
+func (c *MemoryTtlCache) isWebSocketRequest(req *http.Request) bool {
+	return strings.ToLower(req.Header.Get("Upgrade")) == "websocket"
+}
+
 func (c *MemoryTtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(ctx echo.Context) error {
-		cache, err := c.get(ctx.Request().URL.String())
-		if errors.Is(err, ttlcache.ErrNoSuchKey) || errors.Is(err, ttlcache.ErrExpired) {
-			if err := c.proxyRequest(ctx); err != nil {
-				return err
-			}
+		req := ctx.Request()
 
-			ctx.Response().Header().Set("XOuchCdn", "miss")
-		} else if err != nil {
-			return err
-		} else {
-			if err := ctx.Blob(
-				http.StatusOK,
-				cache.ContentType,
-				cache.Data,
-			); err != nil {
-				return err
-			}
-
-			ctx.Response().Header().Set("XOuchCdn", "cached")
+		// WebSocket requests bypass cache and go directly to proxy
+		if c.isWebSocketRequest(req) {
+			c.logger.Debugf("WebSocket request: %s", req.URL.String())
+			c.proxy.ServeHTTP(ctx.Response(), req)
+			c.setHeaders(ctx)
+			return nil
 		}
 
+		// Try to get from cache
+		cache, err := c.get(req.URL.String())
+		if errors.Is(err, ttlcache.ErrNoSuchKey) || errors.Is(err, ttlcache.ErrExpired) {
+			// Cache miss - proxy the request
+			c.proxy.ServeHTTP(ctx.Response(), req)
+			c.setHeaders(ctx)
+			return nil
+		} else if err != nil {
+			return err
+		}
+
+		// Cache hit - serve from cache
+		if err := ctx.Blob(
+			http.StatusOK,
+			cache.ContentType,
+			cache.Data,
+		); err != nil {
+			return err
+		}
+
+		ctx.Response().Header().Set("XOuchCdn", "cached")
 		c.setHeaders(ctx)
 
 		return nil
