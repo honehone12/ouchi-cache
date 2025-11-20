@@ -27,13 +27,12 @@ func main() {
 		e.Logger.Fatal(err)
 	}
 
-	var cache ttlcache.TtlCache
-	cache = memory.NewMemoryTtlCache(ttlcache.TtlCacheConfig{
-		Origin:  fmt.Sprintf("localhost:%d", config.OriginPort),
-		Ttl:     time.Second * config.TtlSec,
-		Tick:    time.Second * config.TickSec,
-		Headers: config.Headers,
-		Logger:  e.Logger,
+	cache, err := memory.NewMemoryTtlCache(ttlcache.TtlCacheConfig{
+		ProxyUrl: fmt.Sprintf("http://localhost:%d", config.OriginPort),
+		Ttl:      time.Second * config.TtlSec,
+		Tick:     time.Second * config.TickSec,
+		Headers:  config.Headers,
+		Logger:   e.Logger,
 	})
 
 	originGroup := e.Group("/*")

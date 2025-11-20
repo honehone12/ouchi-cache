@@ -12,11 +12,11 @@ type TtlCache interface {
 }
 
 type TtlCacheConfig struct {
-	Origin  string
-	Ttl     time.Duration
-	Tick    time.Duration
-	Headers map[string]string
-	Logger  Logger
+	ProxyUrl string
+	Ttl      time.Duration
+	Tick     time.Duration
+	Headers  map[string]string
+	Logger   Logger
 }
 
 type ChacheData struct {

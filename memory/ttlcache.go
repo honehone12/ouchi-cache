@@ -18,43 +18,46 @@ import (
 )
 
 type MemoryTtlCache struct {
-	origin   string
 	ttl      time.Duration
 	tick     time.Duration
 	headers  map[string]string
 	cacheMap sync.Map
 	eolMap   sync.Map
 
-	hasher hash.Hash
-	logger ttlcache.Logger
-	proxy  *httputil.ReverseProxy
+	hasher   hash.Hash
+	logger   ttlcache.Logger
+	proxyUrl *url.URL
+	proxy    *httputil.ReverseProxy
 }
 
-func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) *MemoryTtlCache {
+func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) {
+	proxyUrl, err := url.Parse(config.ProxyUrl)
+	if err != nil {
+		return nil, err
+	}
+	proxy := httputil.NewSingleHostReverseProxy(proxyUrl)
+
 	c := &MemoryTtlCache{
-		origin:   config.Origin,
 		ttl:      config.Ttl,
 		tick:     config.Tick,
 		headers:  config.Headers,
 		cacheMap: sync.Map{},
 		eolMap:   sync.Map{},
 
-		hasher: fnv.New128a(),
-		logger: config.Logger,
+		hasher:   fnv.New128a(),
+		logger:   config.Logger,
+		proxyUrl: proxyUrl,
+		proxy:    proxy,
 	}
 
-	// Create reverse proxy
-	target := &url.URL{
-		Scheme: "http",
-		Host:   config.Origin,
-	}
-	c.proxy = httputil.NewSingleHostReverseProxy(target)
-
-	// Customize the proxy to handle caching
-	c.proxy.ModifyResponse = c.modifyResponse
-
+	// Use modifier for reading and caching response
+	c.proxy.ModifyResponse = c.cacheResponse
 	c.startCleaning()
-	return c
+	return c, nil
+}
+
+func isWebSocketRequest(req *http.Request) bool {
+	return strings.ToLower(req.Header.Get("Upgrade")) == "websocket"
 }
 
 func (c *MemoryTtlCache) setHeaders(ctx echo.Context) {
@@ -64,35 +67,25 @@ func (c *MemoryTtlCache) setHeaders(ctx echo.Context) {
 	}
 }
 
-// modifyResponse intercepts the response to cache it if appropriate
-func (c *MemoryTtlCache) modifyResponse(resp *http.Response) error {
-	// Only cache successful responses
-	if resp.StatusCode == http.StatusOK {
-		cacheControl := resp.Header.Get("Cache-Control")
+func (c *MemoryTtlCache) cacheResponse(res *http.Response) error {
+	if res.StatusCode == http.StatusOK {
+		cacheControl := res.Header.Get("Cache-Control")
 		if cacheControl != "no-cache" && cacheControl != "no-store" {
-			// Read the body
-			body, err := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(res.Body)
 			if err != nil {
 				return err
 			}
-			resp.Body.Close()
+			res.Body.Close()
 
-			// Cache the response
-			c.set(resp.Request.URL.String(), resp.Header.Get("Content-Type"), body)
+			c.set(res.Request.URL.String(), res.Header.Get("Content-Type"), body)
 
-			// Replace the body so it can be read again
-			resp.Body = io.NopCloser(bytes.NewReader(body))
-
-			// Mark as cache miss
-			resp.Header.Set("XOuchCdn", "miss")
+			// Set body again. better way ??
+			res.Body = io.NopCloser(bytes.NewReader(body))
+			res.Header.Set("XOuchCdn", "miss")
 		}
 	}
 
 	return nil
-}
-
-func (c *MemoryTtlCache) isWebSocketRequest(req *http.Request) bool {
-	return strings.ToLower(req.Header.Get("Upgrade")) == "websocket"
 }
 
 func (c *MemoryTtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFunc {
@@ -100,17 +93,18 @@ func (c *MemoryTtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFu
 		req := ctx.Request()
 
 		// WebSocket requests bypass cache and go directly to proxy
-		if c.isWebSocketRequest(req) {
+		if isWebSocketRequest(req) {
 			c.logger.Debugf("WebSocket request: %s", req.URL.String())
+			req.Host = c.proxyUrl.Hostname()
 			c.proxy.ServeHTTP(ctx.Response(), req)
 			c.setHeaders(ctx)
 			return nil
 		}
 
-		// Try to get from cache
 		cache, err := c.get(req.URL.String())
+		// Cache miss - proxy the request
 		if errors.Is(err, ttlcache.ErrNoSuchKey) || errors.Is(err, ttlcache.ErrExpired) {
-			// Cache miss - proxy the request
+			req.Host = c.proxyUrl.Hostname()
 			c.proxy.ServeHTTP(ctx.Response(), req)
 			c.setHeaders(ctx)
 			return nil
@@ -118,7 +112,6 @@ func (c *MemoryTtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFu
 			return err
 		}
 
-		// Cache hit - serve from cache
 		if err := ctx.Blob(
 			http.StatusOK,
 			cache.ContentType,
