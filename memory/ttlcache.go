@@ -2,7 +2,6 @@ package memory
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"hash"
 	"hash/fnv"
@@ -59,11 +58,6 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) 
 
 func isWebSocketRequest(req *http.Request) bool {
 	return strings.ToLower(req.Header.Get("Upgrade")) == "websocket"
-}
-
-func (c *MemoryTtlCache) hashHex(key string) string {
-	b := c.hasher.Sum([]byte(key))
-	return hex.EncodeToString(b)
 }
 
 func (c *MemoryTtlCache) setHeaders(ctx echo.Context) {
@@ -175,7 +169,8 @@ func (c *MemoryTtlCache) cleaning() {
 
 func (c *MemoryTtlCache) get(url string) (*ttlcache.ChacheData, error) {
 	c.logger.Debugf("looking for %s", url)
-	hash := c.hashHex(url)
+	hash := string(c.hasher.Sum([]byte(url)))
+
 	v, ok := c.cacheMap.Load(hash)
 	if !ok {
 		return nil, ttlcache.ErrNoSuchKey
@@ -207,7 +202,7 @@ func (c *MemoryTtlCache) set(
 		ContentEncoding: contentEncoding,
 		Data:            content,
 	}
-	hash := c.hashHex(url)
+	hash := string(c.hasher.Sum([]byte(url)))
 
 	c.cacheMap.Store(hash, d)
 	c.eolMap.Store(eol, hash)
