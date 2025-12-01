@@ -51,7 +51,7 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) 
 	}
 
 	// Use modifier for reading and caching response
-	c.proxy.ModifyResponse = c.cacheResponse
+	c.proxy.ModifyResponse = c.onProxyResponse
 	c.startCleaning()
 	return c, nil
 }
@@ -67,18 +67,19 @@ func (c *MemoryTtlCache) setHeaders(ctx echo.Context) {
 	}
 }
 
-func (c *MemoryTtlCache) cacheResponse(res *http.Response) error {
+func (c *MemoryTtlCache) onProxyResponse(res *http.Response) error {
 	if res.StatusCode == http.StatusOK {
 		h := res.Header
 		cacheControl := h.Get("Cache-Control")
 		if cacheControl != "no-cache" && cacheControl != "no-store" {
-			defer res.Body.Close()
 			body, err := io.ReadAll(res.Body)
 			if err != nil {
 				return err
 			}
+			// close now to set later
+			res.Body.Close()
 
-			c.set(
+			go c.cacheResponse(
 				res.Request.URL.RequestURI(),
 				h.Get("Content-Type"),
 				h.Get("Content-Encoding"),
@@ -92,6 +93,15 @@ func (c *MemoryTtlCache) cacheResponse(res *http.Response) error {
 	}
 
 	return nil
+}
+
+func (c *MemoryTtlCache) cacheResponse(
+	url string,
+	contentType string,
+	contentEncoding string,
+	body []byte,
+) {
+	c.set(url, contentType, contentEncoding, body)
 }
 
 func (c *MemoryTtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFunc {
