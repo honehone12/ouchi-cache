@@ -204,7 +204,11 @@ func (c *MemoryTtlCache) cleaning() {
 
 func (c *MemoryTtlCache) get(url string) (*ttlcache.ChacheData, error) {
 	c.logger.Debugf("looking for %s", url)
-	hash := string(c.hasher.Sum([]byte(url)))
+
+	if _, err := c.hasher.Write([]byte(url)); err != nil {
+		return nil, err
+	}
+	hash := string(c.hasher.Sum(nil))
 	c.hasher.Reset()
 
 	v, ok := c.cacheMap.Load(hash)
@@ -238,7 +242,9 @@ func (c *MemoryTtlCache) set(
 		ContentEncoding: contentEncoding,
 		Data:            content,
 	}
-	hash := string(c.hasher.Sum([]byte(url)))
+
+	c.hasher.Write([]byte(url))
+	hash := string(c.hasher.Sum(nil))
 	c.hasher.Reset()
 
 	s, ok := c.eolMap.Load(0)
@@ -257,7 +263,7 @@ func (c *MemoryTtlCache) set(
 	c.cacheMap.Store(hash, d)
 	c.eolMap.Store(eol, hash)
 	c.logger.Debugf(
-		"cached: [url] %s, [typ] %s, [enc] %s, [hash] %s",
+		"cached: [url] %s, [type] %s, [enc] %s, [hash] %s",
 		url,
 		contentType,
 		contentEncoding,
