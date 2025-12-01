@@ -29,8 +29,8 @@ func main() {
 
 	cache, err := memory.NewMemoryTtlCache(ttlcache.TtlCacheConfig{
 		ProxyUrl: fmt.Sprintf("http://localhost:%d", config.OriginPort),
-		Ttl:      time.Second * config.TtlSec,
-		Tick:     time.Second * config.TickSec,
+		TtlSec:   time.Second * config.TtlSec,
+		TickSec:  time.Second * config.TickSec,
 		Headers:  config.Headers,
 		Logger:   e.Logger,
 	})

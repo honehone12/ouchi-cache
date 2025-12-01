@@ -13,8 +13,8 @@ type TtlCache interface {
 
 type TtlCacheConfig struct {
 	ProxyUrl string
-	Ttl      time.Duration
-	Tick     time.Duration
+	TtlSec   time.Duration
+	TickSec  time.Duration
 	Headers  map[string]string
 	Logger   Logger
 }

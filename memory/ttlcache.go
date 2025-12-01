@@ -19,8 +19,8 @@ import (
 )
 
 type MemoryTtlCache struct {
-	ttl      time.Duration
-	tick     time.Duration
+	ttlSec   time.Duration
+	tickSec  time.Duration
 	headers  map[string]string
 	cacheMap sync.Map
 	eolMap   sync.Map
@@ -39,8 +39,8 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) 
 	proxy := httputil.NewSingleHostReverseProxy(proxyUrl)
 
 	c := &MemoryTtlCache{
-		ttl:      config.Ttl,
-		tick:     config.Tick,
+		ttlSec:   config.TtlSec,
+		tickSec:  config.TickSec,
 		headers:  config.Headers,
 		cacheMap: sync.Map{},
 		eolMap:   sync.Map{},
@@ -162,11 +162,11 @@ func (c *MemoryTtlCache) startCleaning() {
 }
 
 func (c *MemoryTtlCache) cleaning() {
-	ticker := time.Tick(c.tick)
+	ticker := time.Tick(c.tickSec)
 
 	for now := range ticker {
 		c.logger.Debug("cleaning")
-		nowUnix := now.Unix()
+		nowMil := now.UnixMicro()
 
 		s, ok := c.eolMap.Load(0)
 		if !ok {
@@ -180,7 +180,7 @@ func (c *MemoryTtlCache) cleaning() {
 		}
 
 		for _, eol := range sorted {
-			if eol >= nowUnix {
+			if eol >= nowMil {
 				break
 			}
 
@@ -196,7 +196,7 @@ func (c *MemoryTtlCache) cleaning() {
 		}
 
 		sorted = slices.DeleteFunc(sorted, func(eol int64) bool {
-			return eol < nowUnix
+			return eol < nowMil
 		})
 		c.eolMap.Store(0, sorted)
 	}
@@ -205,6 +205,7 @@ func (c *MemoryTtlCache) cleaning() {
 func (c *MemoryTtlCache) get(url string) (*ttlcache.ChacheData, error) {
 	c.logger.Debugf("looking for %s", url)
 	hash := string(c.hasher.Sum([]byte(url)))
+	c.hasher.Reset()
 
 	v, ok := c.cacheMap.Load(hash)
 	if !ok {
@@ -215,7 +216,7 @@ func (c *MemoryTtlCache) get(url string) (*ttlcache.ChacheData, error) {
 		return nil, errors.New("failed to acquire value as expexted structure type")
 	}
 
-	now := time.Now().Unix()
+	now := time.Now().UnixMicro()
 	if d.Eol < now {
 		return nil, ttlcache.ErrExpired
 	}
@@ -230,7 +231,7 @@ func (c *MemoryTtlCache) set(
 	contentEncoding string,
 	content []byte,
 ) error {
-	eol := time.Now().Add(c.ttl).Unix()
+	eol := time.Now().Add(c.ttlSec).UnixMicro()
 	d := &ttlcache.ChacheData{
 		Eol:             eol,
 		ContentType:     contentType,
@@ -238,6 +239,7 @@ func (c *MemoryTtlCache) set(
 		Data:            content,
 	}
 	hash := string(c.hasher.Sum([]byte(url)))
+	c.hasher.Reset()
 
 	s, ok := c.eolMap.Load(0)
 	if !ok {
@@ -254,6 +256,12 @@ func (c *MemoryTtlCache) set(
 
 	c.cacheMap.Store(hash, d)
 	c.eolMap.Store(eol, hash)
-	c.logger.Debugf("cached: %s, %s, %s", url, contentType, contentEncoding)
+	c.logger.Debugf(
+		"cached: [url] %s, [typ] %s, [enc] %s, [hash] %s",
+		url,
+		contentType,
+		contentEncoding,
+		hash,
+	)
 	return nil
 }
