@@ -23,13 +23,14 @@ type MemoryTtlCache struct {
 	tickSec  time.Duration
 	headers  map[string]string
 	cacheMap sync.Map
-	eolMap   sync.Map
 
 	hasher   hash.Hash
 	logger   ttlcache.Logger
 	proxyUrl *url.URL
 	proxy    *httputil.ReverseProxy
 }
+
+const EOL_DATA_KEY = "EOL_DATA_KEY"
 
 func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) {
 	proxyUrl, err := url.Parse(config.ProxyUrl)
@@ -43,7 +44,6 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) 
 		tickSec:  config.TickSec,
 		headers:  config.Headers,
 		cacheMap: sync.Map{},
-		eolMap:   sync.Map{},
 
 		hasher:   fnv.New128a(),
 		logger:   config.Logger,
@@ -54,13 +54,22 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) 
 	// Use modifier for reading and caching response
 	c.proxy.ModifyResponse = c.onProxyResponse
 	// Store sorted slice at key of 0
-	c.eolMap.Store(0, make([]int64, 0))
+	c.cacheMap.Store(EOL_DATA_KEY, make([]ttlcache.EolData, 0))
 	c.startCleaning()
 	return c, nil
 }
 
 func isWebSocketRequest(req *http.Request) bool {
 	return strings.ToLower(req.Header.Get("Upgrade")) == "websocket"
+}
+
+func (c *MemoryTtlCache) hashKey(key string) (string, error) {
+	if _, err := c.hasher.Write([]byte(key)); err != nil {
+		return "", err
+	}
+	hash := string(c.hasher.Sum(nil))
+	c.hasher.Reset()
+	return hash, nil
 }
 
 func (c *MemoryTtlCache) setHeaders(ctx echo.Context) {
@@ -164,52 +173,44 @@ func (c *MemoryTtlCache) startCleaning() {
 func (c *MemoryTtlCache) cleaning() {
 	ticker := time.Tick(c.tickSec)
 
-	for now := range ticker {
-		c.logger.Debug("cleaning... now: %d", now)
-		nowMil := now.UnixMicro()
+	for t := range ticker {
+		c.logger.Debugf("cleaning... now: %d", t)
+		now := t.Unix()
 
-		s, ok := c.eolMap.Load(0)
+		s, ok := c.cacheMap.Load(EOL_DATA_KEY)
 		if !ok {
 			c.logger.Error("failed to load sorted eol list")
 			continue
 		}
-		sorted, ok := s.([]int64)
+		sorted, ok := s.([]ttlcache.EolData)
 		if !ok {
 			c.logger.Error("failed to cast sorted eol list")
 			continue
 		}
 
-		for _, eol := range sorted {
-			if eol >= nowMil {
+		for _, eolData := range sorted {
+			if eolData.Eol >= now {
 				break
 			}
 
-			v, ok := c.eolMap.Load(eol)
-			if !ok {
-				c.logger.Errorf("failed to load [%d]", eol)
-				continue
-			}
-
-			c.eolMap.Delete(eol)
-			c.cacheMap.Delete(v)
-			c.logger.Debugf("deleted: %s", v)
+			c.cacheMap.Delete(eolData.Key)
+			c.logger.Debugf("deleted: %s", eolData.Key)
 		}
 
-		sorted = slices.DeleteFunc(sorted, func(eol int64) bool {
-			return eol < nowMil
+		sorted = slices.DeleteFunc(sorted, func(eolData ttlcache.EolData) bool {
+			return eolData.Eol < now
 		})
-		c.eolMap.Store(0, sorted)
+		c.cacheMap.Store(EOL_DATA_KEY, sorted)
 	}
 }
 
 func (c *MemoryTtlCache) get(url string) (*ttlcache.ChacheData, error) {
 	c.logger.Debugf("looking for %s", url)
 
-	if _, err := c.hasher.Write([]byte(url)); err != nil {
+	hash, err := c.hashKey(url)
+	if err != nil {
 		return nil, err
 	}
-	hash := string(c.hasher.Sum(nil))
-	c.hasher.Reset()
 
 	v, ok := c.cacheMap.Load(hash)
 	if !ok {
@@ -220,7 +221,7 @@ func (c *MemoryTtlCache) get(url string) (*ttlcache.ChacheData, error) {
 		return nil, errors.New("failed to acquire value as expexted structure type")
 	}
 
-	now := time.Now().UnixMicro()
+	now := time.Now().Unix()
 	if d.Eol < now {
 		return nil, ttlcache.ErrExpired
 	}
@@ -235,7 +236,7 @@ func (c *MemoryTtlCache) set(
 	contentEncoding string,
 	content []byte,
 ) error {
-	eol := time.Now().Add(c.ttlSec).UnixMicro()
+	eol := time.Now().Add(c.ttlSec).Unix()
 	d := &ttlcache.ChacheData{
 		Eol:             eol,
 		ContentType:     contentType,
@@ -243,25 +244,28 @@ func (c *MemoryTtlCache) set(
 		Data:            content,
 	}
 
-	c.hasher.Write([]byte(url))
-	hash := string(c.hasher.Sum(nil))
-	c.hasher.Reset()
+	hash, err := c.hashKey(url)
+	if err != nil {
+		return err
+	}
 
-	s, ok := c.eolMap.Load(0)
+	s, ok := c.cacheMap.Load(EOL_DATA_KEY)
 	if !ok {
 		return errors.New("could not find key for sorted eol list")
 	}
-	sorted, ok := s.([]int64)
+	sorted, ok := s.([]ttlcache.EolData)
 	if !ok {
 		return errors.New("failed to cast sorted eol list")
 	}
 
-	sorted = append(sorted, eol)
-	slices.Sort(sorted)
-	c.eolMap.Store(0, sorted)
+	sorted = append(sorted, ttlcache.EolData{
+		Key: hash,
+		Eol: eol,
+	})
+	slices.SortFunc(sorted, ttlcache.SortEolData)
+	c.cacheMap.Store(EOL_DATA_KEY, sorted)
 
 	c.cacheMap.Store(hash, d)
-	c.eolMap.Store(eol, hash)
 	c.logger.Debugf(
 		"cached: [url] %s, [type] %s, [enc] %s, [hash] %s",
 		url,

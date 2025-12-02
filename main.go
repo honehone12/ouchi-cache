@@ -20,7 +20,7 @@ func main() {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Logger.SetLevel(log.DEBUG)
-	e.Logger.SetPrefix("OUCHI-CDN")
+	e.Logger.SetPrefix("OUCH-CACHE")
 
 	config, err := ttlcache.ReadConfigFile(path.Clean(*configPath))
 	if err != nil {
