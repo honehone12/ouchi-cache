@@ -1,2 +1,2 @@
 # ouchi-cdn
-cdn mock for local development
+cache server or cdn mock for local development
