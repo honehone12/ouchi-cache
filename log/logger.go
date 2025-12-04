@@ -1,4 +1,4 @@
-package ttlcache
+package log
 
 type Logger interface {
 	Debug(args ...any)

@@ -6,7 +6,6 @@ import (
 	"ouchi/memory"
 	"ouchi/ttlcache"
 	"path"
-	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -32,13 +31,18 @@ func main() {
 		e.Logger.Fatal(err)
 	}
 
-	cache, err := memory.NewMemoryTtlCache(ttlcache.TtlCacheConfig{
-		ProxyUrl: fmt.Sprintf("http://localhost:%d", config.OriginPort),
-		TtlSec:   time.Second * config.TtlSec,
-		TickSec:  time.Second * config.TickSec,
-		Headers:  config.Headers,
-		Logger:   e.Logger,
-	})
+	store := memory.NewMemoryStore(
+		e.Logger,
+		config.TickSec,
+		config.TtlSec,
+	)
+
+	cache, err := ttlcache.NewTtlCache(
+		e.Logger,
+		store,
+		fmt.Sprintf("http://localhost:%d", config.OriginPort),
+		config.Headers,
+	)
 
 	originGroup := e.Group("/*")
 	originGroup.Use(cache.Middleware())

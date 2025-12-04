@@ -1,22 +1,16 @@
-package ttlcache
+package cache
 
-import (
-	"errors"
-	"time"
+import "errors"
 
-	"github.com/labstack/echo/v4"
-)
-
-type TtlCache interface {
-	Middleware() echo.MiddlewareFunc
-}
-
-type TtlCacheConfig struct {
-	ProxyUrl string
-	TtlSec   time.Duration
-	TickSec  time.Duration
-	Headers  map[string]string
-	Logger   Logger
+type ChacheStore interface {
+	Get(url string) (*ChacheData, error)
+	Set(
+		url string,
+		/* or receive map[string]string */
+		contentType string,
+		contentEncoding string,
+		content []byte,
+	) error
 }
 
 type ChacheData struct {
