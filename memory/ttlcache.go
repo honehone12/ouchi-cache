@@ -3,7 +3,6 @@ package memory
 import (
 	"bytes"
 	"errors"
-	"hash"
 	"hash/fnv"
 	"io"
 	"net/http"
@@ -24,7 +23,6 @@ type MemoryTtlCache struct {
 	headers  map[string]string
 	cacheMap sync.Map
 
-	hasher   hash.Hash
 	logger   ttlcache.Logger
 	proxyUrl *url.URL
 	proxy    *httputil.ReverseProxy
@@ -45,7 +43,6 @@ func NewMemoryTtlCache(config ttlcache.TtlCacheConfig) (*MemoryTtlCache, error) 
 		headers:  config.Headers,
 		cacheMap: sync.Map{},
 
-		hasher:   fnv.New128a(),
 		logger:   config.Logger,
 		proxyUrl: proxyUrl,
 		proxy:    proxy,
@@ -64,11 +61,11 @@ func isWebSocketRequest(req *http.Request) bool {
 }
 
 func (c *MemoryTtlCache) hashKey(key string) (string, error) {
-	if _, err := c.hasher.Write([]byte(key)); err != nil {
+	hasher := fnv.New128a()
+	if _, err := hasher.Write([]byte(key)); err != nil {
 		return "", err
 	}
-	hash := string(c.hasher.Sum(nil))
-	c.hasher.Reset()
+	hash := string(hasher.Sum(nil))
 	return hash, nil
 }
 
