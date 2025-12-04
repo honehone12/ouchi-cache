@@ -50,26 +50,9 @@ func NewTtlCache(
 	return c, nil
 }
 
-func (c *TtlCache) setHeaders(
-	ctx echo.Context,
-	/* or receive map[string]string */
-	contentEncoding string,
-	cached bool,
-) {
-	headers := ctx.Response().Header()
-
+func (c *TtlCache) setConfiguredHeaders(header http.Header) {
 	for k, v := range c.headers {
-		headers.Set(k, v)
-	}
-
-	if len(contentEncoding) != 0 {
-		headers.Set("Content-Encoding", contentEncoding)
-	}
-
-	if cached {
-		headers.Set("XOuchiCache", "cachd")
-	} else {
-		headers.Set("XOuchiCache", "miss")
+		header.Set(k, v)
 	}
 }
 
@@ -111,6 +94,9 @@ func (c *TtlCache) onProxyResponse(res *http.Response) error {
 
 			res.Body = io.NopCloser(bytes.NewReader(b))
 		}
+
+		h.Set("XOuchiCache", "miss")
+		c.setConfiguredHeaders(h)
 	}
 
 	return nil
@@ -125,14 +111,19 @@ func (c *TtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFunc {
 		if errors.Is(err, cache.ErrNoSuchKey) || errors.Is(err, cache.ErrExpired) {
 			c.logger.Debug(err)
 			req.Host = c.proxyUrl.Hostname()
-			c.proxy.ServeHTTP(ctx.Response(), req)
-			c.setHeaders(ctx, "", false)
+			res := ctx.Response()
+			c.proxy.ServeHTTP(res, req)
 			return nil
 		} else if err != nil {
 			return err
 		}
 
-		c.setHeaders(ctx, d.ContentEncoding, true)
+		h := ctx.Response().Header()
+		h.Set("XOuchiCache", "cached")
+		if len(d.ContentEncoding) != 0 {
+			h.Set("Content-Encoding", d.ContentEncoding)
+		}
+		c.setConfiguredHeaders(h)
 
 		return ctx.Blob(
 			http.StatusOK,
