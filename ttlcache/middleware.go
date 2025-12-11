@@ -60,22 +60,34 @@ func (c *TtlCache) onProxyResponse(res *http.Response) error {
 		h := res.Header
 		cacheControl := h.Get("Cache-Control")
 		if cacheControl != "no-cache" && cacheControl != "no-store" {
-			contentType := h.Get("Content-Type")
 			b, err := io.ReadAll(res.Body)
 			if err != nil {
 				return err
 			}
 
+			d := &cache.ChacheData{
+				ContentType: h.Get("Content-Type"),
+				Data:        b,
+			}
+
+			req := res.Request
+
 			if err := c.store.Set(
-				res.Request.URL.RequestURI(),
-				contentType,
-				b,
+				req.URL.RequestURI(),
+				d,
 			); err != nil {
 				return err
 			}
 
-			res.Body = io.NopCloser(bytes.NewReader(b))
+			cmp, err := d.CompressTextData(req.Header, h)
+			if err != nil {
+				return err
+			}
+
+			res.Body = io.NopCloser(bytes.NewReader(cmp))
 		}
+
+		// currentry it is not implemented to compress no-cache|no-store data
 
 		h.Set("X-Ouchi-Cache", "miss")
 		c.setConfiguredHeaders(h)
@@ -101,13 +113,18 @@ func (c *TtlCache) middlewareHandler(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		h := ctx.Response().Header()
+		cmp, err := d.CompressTextData(req.Header, h)
+		if err != nil {
+			return err
+		}
+
 		h.Set("X-Ouchi-Cache", "cached")
 		c.setConfiguredHeaders(h)
 
 		return ctx.Blob(
 			http.StatusOK,
 			d.ContentType,
-			d.Data,
+			cmp,
 		)
 	}
 }

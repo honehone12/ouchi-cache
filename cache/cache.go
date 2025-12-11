@@ -6,9 +6,7 @@ type ChacheStore interface {
 	Get(url string) (*ChacheData, error)
 	Set(
 		url string,
-		/* or receive map[string]string */
-		contentType string,
-		content []byte,
+		data *ChacheData,
 	) error
 }
 

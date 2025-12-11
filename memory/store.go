@@ -100,17 +100,9 @@ func (m *MemoryStore) Get(url string) (*cache.ChacheData, error) {
 	return d, nil
 }
 
-func (m *MemoryStore) Set(
-	url string,
-	contentType string,
-	content []byte,
-) error {
+func (m *MemoryStore) Set(url string, data *cache.ChacheData) error {
 	eol := time.Now().Add(m.ttlSec).Unix()
-	d := &cache.ChacheData{
-		Eol:         eol,
-		ContentType: contentType,
-		Data:        content,
-	}
+	data.Eol = eol
 
 	hash, err := cache.HashKey(url)
 	if err != nil {
@@ -133,11 +125,10 @@ func (m *MemoryStore) Set(
 	slices.SortFunc(sorted, cache.SortEolData)
 	m.cacheMap.Store(EOL_DATA_KEY, sorted)
 
-	m.cacheMap.Store(hash, d)
+	m.cacheMap.Store(hash, data)
 	m.logger.Debugf(
-		"cached: [url] %s, [type] %s, [enc] %s, [hash] %s",
+		"cached: [url] %s, [hash] %s",
 		url,
-		contentType,
 		hash,
 	)
 	return nil
